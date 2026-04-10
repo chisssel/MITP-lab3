@@ -230,3 +230,129 @@ func TestPathPrefixMatching(t *testing.T) {
 		})
 	}
 }
+
+func TestHealthCheckEndpoint(t *testing.T) {
+	tests := []struct {
+		name           string
+		path           string
+		method         string
+		expectedStatus int
+		expectedBody   string
+		expectedJSON   bool
+	}{
+		{"GET health endpoint", "/health", "GET", http.StatusOK, `{"status":"ok"}`, true},
+		{"GET health with trailing slash", "/health/", "GET", http.StatusOK, `{"status":"ok"}`, true},
+		{"POST to health should fail", "/health", "POST", http.StatusMethodNotAllowed, "", false},
+		{"PUT to health should fail", "/health", "PUT", http.StatusMethodNotAllowed, "", false},
+		{"DELETE to health should fail", "/health", "DELETE", http.StatusMethodNotAllowed, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			})
+			mux.HandleFunc("/health/", func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			})
+
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			if tt.expectedJSON && tt.expectedBody != "" {
+				body, _ := io.ReadAll(rec.Body)
+				if string(body) != tt.expectedBody {
+					t.Errorf("expected body %s, got %s", tt.expectedBody, string(body))
+				}
+			}
+		})
+	}
+}
+
+func TestHealthCheckResponseFormat(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		expectedKeys []string
+	}{
+		{"health endpoint returns status", "/health", []string{"status"}},
+		{"health with slash returns status", "/health/", []string{"status"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			})
+			mux.HandleFunc("/health/", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			})
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			contentType := rec.Header().Get("Content-Type")
+			if !strings.Contains(contentType, "application/json") {
+				t.Errorf("expected Content-Type application/json, got %s", contentType)
+			}
+		})
+	}
+}
+
+func TestHealthCheckCurlCompatible(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		curlCode int
+	}{
+		{"health for curl -f flag", "/health", 0},
+		{"health slash for curl -f flag", "/health/", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			})
+			mux.HandleFunc("/health/", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			})
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			curlExitCode := 0
+			if rec.Code >= 400 {
+				curlExitCode = 22
+			}
+
+			if curlExitCode != tt.curlCode {
+				t.Errorf("expected curl exit code %d for path %s, got %d", tt.curlCode, tt.path, curlExitCode)
+			}
+		})
+	}
+}

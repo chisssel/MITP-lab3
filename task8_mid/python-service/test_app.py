@@ -108,3 +108,71 @@ def test_user_not_found_error_message(client):
     data = response.get_json()
     assert "error" in data
     assert data["error"] == "User not found"
+
+
+class TestHealthCheck:
+    @pytest.mark.parametrize("path,expected_status", [
+        ("/health", 200),
+    ])
+    def test_health_endpoint_status(self, client, path, expected_status):
+        response = client.get(path)
+        assert response.status_code == expected_status
+
+    @pytest.mark.parametrize("path,expected_body", [
+        ("/health", {"status": "ok"}),
+    ])
+    def test_health_endpoint_body(self, client, path, expected_body):
+        response = client.get(path)
+        data = response.get_json()
+        assert data == expected_body
+
+    def test_health_returns_json(self, client):
+        response = client.get("/health")
+        assert response.is_json
+        data = response.get_json()
+        assert "status" in data
+
+    def test_health_status_is_ok(self, client):
+        response = client.get("/health")
+        data = response.get_json()
+        assert data["status"] == "ok"
+
+    def test_health_content_type(self, client):
+        response = client.get("/health")
+        assert "application/json" in response.content_type
+
+    @pytest.mark.parametrize("method", [
+        "POST",
+        "PUT",
+        "DELETE",
+        "PATCH",
+    ])
+    def test_health_methods_not_allowed(self, client, method):
+        response = client.open("/health", method=method)
+        assert response.status_code == 405
+
+    def test_health_curl_compatible(self, client):
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.status_code < 400
+
+
+class TestHealthCheckDockerCompose:
+    def test_health_endpoint_existence(self, client):
+        response = client.get("/health")
+        assert response.status_code == 200
+
+    def test_health_returns_valid_json_for_curl(self, client):
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert isinstance(data, dict)
+        assert "status" in data
+
+    def test_health_response_time(self, client):
+        import time
+        start = time.time()
+        response = client.get("/health")
+        elapsed = time.time() - start
+        assert response.status_code == 200
+        assert elapsed < 1.0

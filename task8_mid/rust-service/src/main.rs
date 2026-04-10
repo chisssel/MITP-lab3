@@ -213,6 +213,95 @@ mod tests {
         assert_eq!(state1.get_requests(), 2);
         assert_eq!(state2.get_requests(), 0);
     }
+
+    #[test]
+    fn test_healthcheck_response_format() {
+        let response = create_health_response();
+        assert!(response.contains("status"));
+        assert!(response.contains("ok"));
+    }
+
+    #[test]
+    fn test_healthcheck_is_valid_json() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["status"], "ok");
+    }
+
+    #[test]
+    fn test_healthcheck_json_structure() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert!(parsed.is_object());
+        assert!(parsed.get("status").is_some());
+    }
+
+    #[test]
+    fn test_healthcheck_status_value() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let status = parsed["status"].as_str().unwrap();
+        assert_eq!(status, "ok");
+    }
+
+    #[test]
+    fn test_healthcheck_curl_compatible() {
+        let response = create_health_response();
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&response);
+        assert!(parsed.is_ok());
+        let parsed = parsed.unwrap();
+        assert!(!parsed.is_null());
+    }
+
+    #[test]
+    fn test_healthcheck_no_extra_fields() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let obj = parsed.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("status"));
+    }
+
+    #[test]
+    fn test_healthcheck_string_format() {
+        let response = create_health_response();
+        assert_eq!(response, r#"{"status":"ok"}"#);
+    }
+
+    #[test]
+    fn test_health_endpoint_in_routes() {
+        let routes = vec![("/health", true), ("/health/", false)];
+
+        for (path, expected) in routes {
+            let matches = match path {
+                "/health" => true,
+                _ => false,
+            };
+            assert_eq!(
+                matches, expected,
+                "Path {} should match: {}",
+                path, expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_health_response_immutable() {
+        let response1 = create_health_response();
+        let response2 = create_health_response();
+        assert_eq!(response1, response2);
+    }
+
+    #[test]
+    fn test_health_response_not_affected_by_state() {
+        let state = AppState::new();
+        state.increment_requests();
+        state.increment_requests();
+
+        let health = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&health).unwrap();
+        assert_eq!(parsed["status"], "ok");
+    }
 }
 
 fn main() {
