@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  go-gateway:
+    build:
+      context: ./go-server
+      dockerfile: Dockerfile
+    container_name: go-gateway
+    ports:
+      - "8080:8080"
+    networks:
+      - app-network
+    depends_on:
+      - python-service
+      - rust-service
+    restart: unless-stopped
+
+  python-service:
+    build:
+      context: ./python-service
+      dockerfile: Dockerfile
+    container_name: python-users
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  rust-service:
+    build:
+      context: ./rust-service
+      dockerfile: Dockerfile
+    container_name: rust-stats
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+    name: microservices-network
