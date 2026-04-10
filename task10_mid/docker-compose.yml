@@ -1,0 +1,74 @@
+services:
+  go-gateway:
+    build:
+      context: ./go-server
+      dockerfile: Dockerfile
+    container_name: go-gateway
+    ports:
+      - "${GATEWAY_PORT:-8080}:${GATEWAY_PORT:-8080}"
+    networks:
+      - app-network
+    depends_on:
+      python-service:
+        condition: service_healthy
+      rust-service:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - GATEWAY_PORT=${GATEWAY_PORT:-8080}
+      - PYTHON_SERVICE_URL=${PYTHON_SERVICE_URL:-http://python-service:5000}
+      - RUST_SERVICE_URL=${RUST_SERVICE_URL:-http://rust-service:4000}
+      - USERS_PATH=${USERS_PATH:-/users/}
+      - STATS_PATH=${STATS_PATH:-/stats}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${GATEWAY_PORT:-8080}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  python-service:
+    build:
+      context: ./python-service
+      dockerfile: Dockerfile
+    container_name: python-users
+    networks:
+      - app-network
+    restart: unless-stopped
+    environment:
+      - FLASK_HOST=${FLASK_HOST:-0.0.0.0}
+      - FLASK_PORT=${FLASK_PORT:-5000}
+      - FLASK_DEBUG=${FLASK_DEBUG:-false}
+      - SERVICE_NAME=${PYTHON_SERVICE_NAME:-python-users}
+      - SERVICE_VERSION=${PYTHON_SERVICE_VERSION:-1.0}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${FLASK_PORT:-5000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  rust-service:
+    build:
+      context: ./rust-service
+      dockerfile: Dockerfile
+    container_name: rust-stats
+    networks:
+      - app-network
+    restart: unless-stopped
+    environment:
+      - RUST_HOST=${RUST_HOST:-0.0.0.0}
+      - RUST_PORT=${RUST_PORT:-4000}
+      - SERVICE_NAME=${RUST_SERVICE_NAME:-rust-stats}
+      - SERVICE_VERSION=${RUST_SERVICE_VERSION:-1.0}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${RUST_PORT:-4000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+networks:
+  app-network:
+    driver: bridge
+    name: microservices-network
