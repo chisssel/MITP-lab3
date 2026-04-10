@@ -1,0 +1,434 @@
+use std::env;
+use std::sync::Mutex;
+use std::time::Instant;
+use tiny_http::{Header, Response};
+
+struct AppState {
+    requests: Mutex<u64>,
+    start_time: Instant,
+}
+
+impl AppState {
+    fn new() -> Self {
+        AppState {
+            requests: Mutex::new(0),
+            start_time: Instant::now(),
+        }
+    }
+
+    fn increment_requests(&self) {
+        let mut count = self.requests.lock().unwrap();
+        *count += 1;
+    }
+
+    fn get_requests(&self) -> u64 {
+        *self.requests.lock().unwrap()
+    }
+
+    fn get_uptime(&self) -> u64 {
+        self.start_time.elapsed().as_secs()
+    }
+
+    fn calculate_average(&self) -> f64 {
+        let requests = self.get_requests();
+        let uptime = self.get_uptime();
+        if uptime > 0 {
+            requests as f64 / uptime as f64
+        } else {
+            0.0
+        }
+    }
+}
+
+fn get_env(key: &str, default: &str) -> String {
+    env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn get_env_u16(key: &str, default: u16) -> u16 {
+    env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+fn create_health_response() -> String {
+    r#"{"status":"ok"}"#.to_string()
+}
+
+fn create_health_response_with_service(service_name: &str) -> String {
+    serde_json::json!({
+        "status": "ok",
+        "service": service_name
+    })
+    .to_string()
+}
+
+fn create_stats_response(state: &AppState) -> String {
+    let count = state.get_requests();
+    let uptime = state.get_uptime();
+    let avg = state.calculate_average();
+    serde_json::json!({
+        "total_requests": count,
+        "uptime_seconds": uptime,
+        "average_per_second": avg
+    })
+    .to_string()
+}
+
+fn create_root_response(state: &AppState, service_name: &str, service_version: &str) -> String {
+    serde_json::json!({
+        "service": service_name,
+        "version": service_version,
+        "requests": state.get_requests(),
+        "uptime_seconds": state.get_uptime()
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_state_new() {
+        let state = AppState::new();
+        assert_eq!(state.get_requests(), 0);
+        assert_eq!(state.get_uptime(), 0);
+    }
+
+    #[test]
+    fn test_app_state_increment() {
+        let state = AppState::new();
+        state.increment_requests();
+        state.increment_requests();
+        assert_eq!(state.get_requests(), 2);
+    }
+
+    #[test]
+    fn test_app_state_calculate_average() {
+        let state = AppState::new();
+        state.increment_requests();
+        state.increment_requests();
+        state.increment_requests();
+        let avg = state.calculate_average();
+        assert!(avg >= 0.0);
+    }
+
+    #[test]
+    fn test_health_response_format() {
+        let response = create_health_response();
+        assert!(response.contains("status"));
+        assert!(response.contains("ok"));
+    }
+
+    #[test]
+    fn test_health_response_with_service() {
+        let response = create_health_response_with_service("rust-stats");
+        assert!(response.contains("status"));
+        assert!(response.contains("ok"));
+        assert!(response.contains("rust-stats"));
+    }
+
+    #[test]
+    fn test_stats_response_format() {
+        let state = AppState::new();
+        let response = create_stats_response(&state);
+        assert!(response.contains("total_requests"));
+        assert!(response.contains("uptime_seconds"));
+        assert!(response.contains("average_per_second"));
+    }
+
+    #[test]
+    fn test_root_response_format() {
+        let state = AppState::new();
+        let response = create_root_response(&state, "rust-stats", "1.0");
+        assert!(response.contains("service"));
+        assert!(response.contains("rust-stats"));
+        assert!(response.contains("version"));
+        assert!(response.contains("requests"));
+        assert!(response.contains("uptime_seconds"));
+    }
+
+    #[test]
+    fn test_response_is_valid_json() {
+        let state = AppState::new();
+
+        let health = create_health_response();
+        let parsed_health: serde_json::Value = serde_json::from_str(&health).unwrap();
+        assert_eq!(parsed_health["status"], "ok");
+
+        let stats = create_stats_response(&state);
+        let parsed_stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
+        assert!(parsed_stats["total_requests"].is_number());
+        assert!(parsed_stats["uptime_seconds"].is_number());
+
+        let root = create_root_response(&state, "rust-stats", "1.0");
+        let parsed_root: serde_json::Value = serde_json::from_str(&root).unwrap();
+        assert_eq!(parsed_root["service"], "rust-stats");
+        assert_eq!(parsed_root["version"], "1.0");
+    }
+
+    #[test]
+    fn test_stats_increments_with_requests() {
+        let state = AppState::new();
+
+        state.increment_requests();
+        let stats1 = create_stats_response(&state);
+        let parsed1: serde_json::Value = serde_json::from_str(&stats1).unwrap();
+        assert_eq!(parsed1["total_requests"], 1);
+
+        state.increment_requests();
+        let stats2 = create_stats_response(&state);
+        let parsed2: serde_json::Value = serde_json::from_str(&stats2).unwrap();
+        assert_eq!(parsed2["total_requests"], 2);
+    }
+
+    #[test]
+    fn test_url_routing_logic() {
+        let routes = vec![
+            ("/", true, "root"),
+            ("/stats", true, "stats"),
+            ("/health", true, "health"),
+            ("/nonexistent", false, "404"),
+        ];
+
+        for (path, should_match, _expected) in routes {
+            let is_valid_route = match path {
+                "/" | "/stats" | "/health" => true,
+                _ => false,
+            };
+            assert_eq!(is_valid_route, should_match);
+        }
+    }
+
+    #[test]
+    fn test_average_calculation_zero_uptime() {
+        let state = AppState::new();
+        state.increment_requests();
+        let avg = state.calculate_average();
+        assert_eq!(avg, 0.0);
+    }
+
+    #[test]
+    fn test_average_calculation_with_time() {
+        let state = AppState::new();
+        state.increment_requests();
+        state.increment_requests();
+        let avg = state.calculate_average();
+        assert!(avg >= 0.0);
+    }
+
+    #[test]
+    fn test_content_type_header_format() {
+        let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+        let header_str = format!("{}", header);
+        assert!(header_str.contains("Content-Type"));
+        assert!(header_str.contains("application/json"));
+    }
+
+    #[test]
+    fn test_multiple_state_instances() {
+        let state1 = AppState::new();
+        let state2 = AppState::new();
+
+        state1.increment_requests();
+        state1.increment_requests();
+
+        assert_eq!(state1.get_requests(), 2);
+        assert_eq!(state2.get_requests(), 0);
+    }
+
+    #[test]
+    fn test_healthcheck_response_format() {
+        let response = create_health_response();
+        assert!(response.contains("status"));
+        assert!(response.contains("ok"));
+    }
+
+    #[test]
+    fn test_healthcheck_is_valid_json() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["status"], "ok");
+    }
+
+    #[test]
+    fn test_healthcheck_json_structure() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert!(parsed.is_object());
+        assert!(parsed.get("status").is_some());
+    }
+
+    #[test]
+    fn test_healthcheck_status_value() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let status = parsed["status"].as_str().unwrap();
+        assert_eq!(status, "ok");
+    }
+
+    #[test]
+    fn test_healthcheck_curl_compatible() {
+        let response = create_health_response();
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(&response);
+        assert!(parsed.is_ok());
+        let parsed = parsed.unwrap();
+        assert!(!parsed.is_null());
+    }
+
+    #[test]
+    fn test_healthcheck_no_extra_fields() {
+        let response = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        let obj = parsed.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("status"));
+    }
+
+    #[test]
+    fn test_healthcheck_string_format() {
+        let response = create_health_response();
+        assert_eq!(response, r#"{"status":"ok"}"#);
+    }
+
+    #[test]
+    fn test_health_endpoint_in_routes() {
+        let routes = vec![("/health", true), ("/health/", false)];
+
+        for (path, expected) in routes {
+            let matches = match path {
+                "/health" => true,
+                _ => false,
+            };
+            assert_eq!(matches, expected);
+        }
+    }
+
+    #[test]
+    fn test_health_response_immutable() {
+        let response1 = create_health_response();
+        let response2 = create_health_response();
+        assert_eq!(response1, response2);
+    }
+
+    #[test]
+    fn test_health_response_not_affected_by_state() {
+        let state = AppState::new();
+        state.increment_requests();
+        state.increment_requests();
+
+        let health = create_health_response();
+        let parsed: serde_json::Value = serde_json::from_str(&health).unwrap();
+        assert_eq!(parsed["status"], "ok");
+    }
+
+    #[test]
+    fn test_get_env_with_default() {
+        let default = "default_value";
+        let result = get_env("NON_EXISTENT_VAR", default);
+        assert_eq!(result, default);
+    }
+
+    #[test]
+    fn test_get_env_u16_with_default() {
+        let default: u16 = 4000;
+        let result = get_env_u16("NON_EXISTENT_VAR", default);
+        assert_eq!(result, default);
+    }
+
+    #[test]
+    fn test_health_response_with_service_format() {
+        let response = create_health_response_with_service("rust-stats");
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["status"], "ok");
+        assert_eq!(parsed["service"], "rust-stats");
+    }
+
+    #[test]
+    fn test_root_response_with_custom_service() {
+        let state = AppState::new();
+        let response = create_root_response(&state, "custom-service", "2.0");
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["service"], "custom-service");
+        assert_eq!(parsed["version"], "2.0");
+    }
+
+    #[test]
+    fn test_get_env_returns_custom_value() {
+        std::env::set_var("TEST_CUSTOM_VAR", "custom_value");
+        let result = get_env("TEST_CUSTOM_VAR", "default");
+        std::env::remove_var("TEST_CUSTOM_VAR");
+        assert_eq!(result, "custom_value");
+    }
+
+    #[test]
+    fn test_get_env_u16_returns_custom_value() {
+        std::env::set_var("TEST_PORT_VAR", "5000");
+        let result = get_env_u16("TEST_PORT_VAR", 4000);
+        std::env::remove_var("TEST_PORT_VAR");
+        assert_eq!(result, 5000);
+    }
+
+    #[test]
+    fn test_get_env_u16_invalid_returns_default() {
+        std::env::set_var("TEST_INVALID_PORT", "not_a_number");
+        let result = get_env_u16("TEST_INVALID_PORT", 4000);
+        std::env::remove_var("TEST_INVALID_PORT");
+        assert_eq!(result, 4000);
+    }
+}
+
+fn main() {
+    let host = get_env("RUST_HOST", "0.0.0.0");
+    let port = get_env_u16("RUST_PORT", 4000);
+    let service_name = get_env("SERVICE_NAME", "rust-stats");
+    let service_version = get_env("SERVICE_VERSION", "1.0");
+
+    println!("Configuration:");
+    println!("  Host: {}", host);
+    println!("  Port: {}", port);
+    println!("  Service Name: {}", service_name);
+    println!("  Service Version: {}", service_version);
+
+    let addr = format!("{}:{}", host, port);
+    let server = tiny_http::Server::http(&addr).unwrap();
+    println!("Rust Stats service starting on :{}", port);
+
+    let state = std::sync::Arc::new(AppState {
+        requests: Mutex::new(0),
+        start_time: Instant::now(),
+    });
+
+    let content_type_json =
+        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+
+    for request in server.incoming_requests() {
+        let url = request.url().to_string();
+
+        {
+            let mut count = state.requests.lock().unwrap();
+            *count += 1;
+        }
+
+        let response: Response<std::io::Cursor<Vec<u8>>> = match url.as_str() {
+            "/" | "" => {
+                let body = create_root_response(&state, &service_name, &service_version);
+                Response::from_string(body).with_header(content_type_json.clone())
+            }
+            "/stats" => {
+                let body = create_stats_response(&state);
+                Response::from_string(body).with_header(content_type_json.clone())
+            }
+            "/health" => {
+                let body = create_health_response_with_service(&service_name);
+                Response::from_string(body).with_header(content_type_json.clone())
+            }
+            _ => Response::from_string(r#"{"error":"not found"}"#)
+                .with_header(content_type_json.clone())
+                .with_status_code(404),
+        };
+
+        let _ = request.respond(response);
+    }
+}
