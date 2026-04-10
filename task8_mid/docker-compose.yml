@@ -1,0 +1,57 @@
+services:
+  go-gateway:
+    build:
+      context: ./go-server
+      dockerfile: Dockerfile
+    container_name: go-gateway
+    ports:
+      - "8080:8080"
+    networks:
+      - app-network
+    depends_on:
+      python-service:
+        condition: service_healthy
+      rust-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  python-service:
+    build:
+      context: ./python-service
+      dockerfile: Dockerfile
+    container_name: python-users
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  rust-service:
+    build:
+      context: ./rust-service
+      dockerfile: Dockerfile
+    container_name: rust-stats
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+networks:
+  app-network:
+    driver: bridge
+    name: microservices-network
