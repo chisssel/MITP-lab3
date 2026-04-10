@@ -12,11 +12,11 @@ users_db = [
 def index():
     return jsonify({"service": "python-users", "version": "1.0"})
 
-@app.route("/users")
+@app.route("/users/")
 def get_users():
     return jsonify(users_db)
 
-@app.route("/users/<int:user_id>")
+@app.route("/users/<int:user_id>/")
 def get_user(user_id):
     user = next((u for u in users_db if u["id"] == user_id), None)
     if user:
